@@ -532,16 +532,13 @@ def main():
             else:
                 raise FileExistsError(
                     f"The file {output_path} already exists."
-                    " Please move or remove it before executing..."
+                    " Please move or remove it before executing,"
+                    " or rerun with --remove to overwrite it."
                 )
         df = pd.DataFrame(table[key])
         if args.separate:
-            df["income"] = df["amount"].apply(
-                lambda amount: amount if not str(amount).strip().startswith("-") else 0.0
-            )
-            df["spending"] = df["amount"].apply(
-                lambda amount: amount if str(amount).strip().startswith("-") else 0.0
-            )
+            df["income"] = df["amount"].where(df["amount"] >= 0, 0.0)
+            df["spending"] = df["amount"].where(df["amount"] < 0, 0.0)
             df = df[["date", "income", "spending", "description"]]
         else:
             df = df[["date", "amount", "description"]]
