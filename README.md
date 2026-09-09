@@ -6,11 +6,7 @@ Il vous suffit d'installer l'outil, rassembler vos PDFs dans un dossier et execu
 - Dépôt officiel : [Ludo-code/LBPExtractor](https://github.com/Ludo-code/LBPExtractor)
 - Mention : ce projet est basé sur le projet original [hayj/lbpextract](https://github.com/hayj/lbpextract).
 
-## Fonctionnalités en attente (pull requests)
-
-Consultez les PR ouvertes ici : [PR ouvertes de LBPExtractor](https://github.com/Ludo-code/LBPExtractor/pulls).
-
-Fonctionnalités prévues dans les drafts :
+## Nouvelles fonctionnalités
 
 - Option `-delete` pour remplacer automatiquement un fichier CSV existant.
 - Option `-separate` pour séparer le montant en deux colonnes : `positive_amount` et `negative_amount`.
