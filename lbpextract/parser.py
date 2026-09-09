@@ -456,14 +456,14 @@ def main():
         ),
     )
     parser.add_argument(
-        "-delete",
+        "--remove",
         action="store_true",
-        help="Delete existing output CSV files if they already exist.",
+        help="Remove existing output CSV files if they already exist.",
     )
     parser.add_argument(
-        "-separate",
+        "--separate",
         action="store_true",
-        help="Split amount into positive and negative columns.",
+        help="Split amount into income and spending columns.",
     )
 
     args = parser.parse_args()
@@ -520,9 +520,9 @@ def main():
     for key in table:
         output_path = f"{output_dir}/{key}.csv"
         if os.path.exists(output_path):
-            if args.delete:
+            if args.remove:
                 os.remove(output_path)
-                logging.info("%s removed because -delete is enabled.", output_path)
+                logging.info("%s removed because --remove is enabled.", output_path)
             else:
                 raise FileExistsError(
                     f"The file {output_path} already exists."
