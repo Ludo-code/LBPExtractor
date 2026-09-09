@@ -6,7 +6,7 @@ Pour installer Python sous Windows de manière simple, suivez ces étapes :
 
 Rendez-vous sur le site officiel de Python à l'adresse <https://www.python.org/downloads/windows/>.
 
-Vous verrez les versions disponibles. Choisissez la version la plus récente (par exemple, Python 3.12.0).
+Vous verrez les versions disponibles. Choisissez la version la plus récente (par exemple, Python 3.13.0).
 Installez le premier installeur appelé "Windows installer (64-bit)".
 
 ## Exécutez l'installeur
@@ -25,6 +25,6 @@ Une fois l'installation terminée, ouvrez l'invite de commande (appuyez sur Win 
 python --version
 ```
 
-Vous devriez voir la version de Python que vous avez installée, par exemple : "Python 3.12.0".
+Vous devriez voir la version de Python que vous avez installée, par exemple : "Python 3.13.0".
 
 Python est maintenant installé sur votre système Windows, et vous pouvez commencer à l'utiliser pour exécuter des scripts.

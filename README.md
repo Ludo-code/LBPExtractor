@@ -17,6 +17,8 @@ Il vous suffit d'installer l'outil, rassembler vos PDFs dans un dossier et execu
 
 Ouvrez un terminal en appuyant sur Ctrl + Alt + T ou en cherchant "Terminal" dans votre menu.
 
+LBPExtract prend en charge Python 3.10 et les versions plus récentes.
+
 Assurez-vous d'avoir pip installé. Si ce n'est pas le cas, vous pouvez l'installer en utilisant la commande sudo apt install python3-pip.
 
 Utilisez la commande suivante pour installer le package "lbpextract" depuis PyPI :
