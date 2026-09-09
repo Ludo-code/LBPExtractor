@@ -157,7 +157,7 @@ def parse_lbp_pdf(path):
     return lines, coordinates
 
 
-def is_number(line, regex=r"^[0-9 ,]+$"):
+def is_number(line, regex=r"^[0-9 ]+,[0-9]{2}$"):
     return re.match(regex, line) is not None
 
 
