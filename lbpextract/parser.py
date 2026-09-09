@@ -530,13 +530,13 @@ def main():
                 )
         df = pd.DataFrame(table[key])
         if args.separate:
-            df["positive_amount"] = df["amount"].apply(
+            df["income"] = df["amount"].apply(
                 lambda amount: amount if not str(amount).strip().startswith("-") else 0.0
             )
-            df["negative_amount"] = df["amount"].apply(
+            df["spending"] = df["amount"].apply(
                 lambda amount: amount if str(amount).strip().startswith("-") else 0.0
             )
-            df = df[["date", "positive_amount", "negative_amount", "description"]]
+            df = df[["date", "income", "spending", "description"]]
         else:
             df = df[["date", "amount", "description"]]
         df = df.sort_values(by="date", ascending=False)
