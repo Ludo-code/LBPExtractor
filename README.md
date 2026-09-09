@@ -57,4 +57,11 @@ Une fois dans le répertoire cible, vous pouvez exécuter la commande suivante p
 lbpextract *.pdf
 ```
 
-Les fichiers CSV seront générés dans le même répertoire. Attention, si vous voulez recommencer l'opération (après avoir ajouté de nouveau relevés par exemple), vous devez déplacer ou supprimer les anciens fichiers CSV.
+Les fichiers CSV seront générés dans le même répertoire.
+
+### Options utiles
+
+- `-delete` : supprime automatiquement un CSV existant avant d'en créer un nouveau avec le même nom.
+- `-separate` : sépare la colonne `amount` en deux colonnes :
+  - `positive_amount` (montants positifs)
+  - `negative_amount` (montants négatifs)

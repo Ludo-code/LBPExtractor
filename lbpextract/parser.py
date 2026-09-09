@@ -455,6 +455,16 @@ def main():
             "directory of the input files)"
         ),
     )
+    parser.add_argument(
+        "-delete",
+        action="store_true",
+        help="Delete existing output CSV files if they already exist.",
+    )
+    parser.add_argument(
+        "-separate",
+        action="store_true",
+        help="Split amount into positive and negative columns.",
+    )
 
     args = parser.parse_args()
     pdf_files = []
@@ -510,12 +520,25 @@ def main():
     for key in table:
         output_path = f"{output_dir}/{key}.csv"
         if os.path.exists(output_path):
-            raise FileExistsError(
-                f"The file {output_path} already exists."
-                " Please move or remove it before executing..."
-            )
+            if args.delete:
+                os.remove(output_path)
+                logging.info("%s removed because -delete is enabled.", output_path)
+            else:
+                raise FileExistsError(
+                    f"The file {output_path} already exists."
+                    " Please move or remove it before executing..."
+                )
         df = pd.DataFrame(table[key])
-        df = df[["date", "amount", "description"]]
+        if args.separate:
+            df["positive_amount"] = df["amount"].apply(
+                lambda amount: amount if not str(amount).strip().startswith("-") else 0.0
+            )
+            df["negative_amount"] = df["amount"].apply(
+                lambda amount: amount if str(amount).strip().startswith("-") else 0.0
+            )
+            df = df[["date", "positive_amount", "negative_amount", "description"]]
+        else:
+            df = df[["date", "amount", "description"]]
         df = df.sort_values(by="date", ascending=False)
         df.to_csv(output_path, index=True, header=True)
         logging.info("%s created.", output_path)
