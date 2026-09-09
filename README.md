@@ -1,4 +1,4 @@
-# LBP Extract
+# LBPExtractor
 
 Cet outil permet de convertir vos relevés de compte PDF La Banque Postale en fichiers CSV lisibles dans des logiciels de type tableur comme Excel et LibreOffice Calc.
 Il vous suffit d'installer l'outil, rassembler vos PDFs dans un dossier et executer l'outil, vous aurez alors un ensemble de fichiers CSV qui apparaitront dans le dossier contenant vos relevés. 
@@ -18,7 +18,7 @@ Il vous suffit d'installer l'outil, rassembler vos PDFs dans un dossier et execu
  4. Téléchargez les fichiers un par un (attention à ne pas en ouvrir plusieurs à la fois au risque de voir certains fichiers ne pas correspondre au bon mois)
  5. Déplacez tous ces fichiers dans le dossier initialement créé
 
-## Installer LBPExtract
+## Installer LBPExtractor
 
 ### Sur Linux
 
@@ -77,8 +77,8 @@ Les fichiers CSV seront générés dans le même répertoire. Attention, si vous
 Vous pouvez aussi utiliser le projet directement depuis le code source :
 
 ```
-git clone https://github.com/hayj/LBPExtract.git
-cd LBPExtract
+git clone https://github.com/Ludo-code/LBPExtractor.git
+cd LBPExtractor
 python -m pip install --upgrade pip
 pip install .
 ```
