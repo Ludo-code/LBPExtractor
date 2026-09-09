@@ -61,7 +61,7 @@ Les fichiers CSV seront générés dans le même répertoire.
 
 ### Options utiles
 
-- `-delete` : supprime automatiquement un CSV existant avant d'en créer un nouveau avec le même nom.
+- `-delete` : si un CSV portant le même nom existe déjà, il est supprimé puis remplacé par une nouvelle version.
 - `-separate` : sépare la colonne `amount` en deux colonnes :
   - `income` (montants positifs)
   - `spending` (montants négatifs)
