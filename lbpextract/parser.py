@@ -19,7 +19,10 @@ import re
 import shutil
 from glob import glob
 from typing import Any, Dict, Tuple
-import fitz  # PyMuPDF
+try:
+    import pymupdf as fitz  # PyMuPDF
+except ImportError:  # pragma: no cover
+    import fitz  # PyMuPDF
 import pandas as pd
 from systemtools.number import getAllNumbers, getFirstNumber
 from systemtools.printer import b, bp
