@@ -10,7 +10,10 @@ Il vous suffit d'installer l'outil, rassembler vos PDFs dans un dossier et execu
 
 Consultez les PR ouvertes ici : [PR ouvertes de LBPExtractor](https://github.com/Ludo-code/LBPExtractor/pulls).
 
-Actuellement, aucune pull request ouverte n'est disponible.
+Fonctionnalités prévues dans les drafts :
+
+- Option `-delete` pour remplacer automatiquement un fichier CSV existant.
+- Option `-separate` pour séparer le montant en deux colonnes : `positive_amount` et `negative_amount`.
 
 ## Assembler vos relevés de compte
 
