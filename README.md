@@ -58,10 +58,3 @@ lbpextract *.pdf
 ```
 
 Les fichiers CSV seront générés dans le même répertoire.
-
-### Options utiles
-
-- `-delete` : si un CSV portant le même nom existe déjà, il est supprimé puis remplacé par une nouvelle version.
-- `-separate` : sépare la colonne `amount` en deux colonnes :
-  - `income` (montants positifs)
-  - `spending` (montants négatifs)
