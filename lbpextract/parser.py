@@ -455,6 +455,16 @@ def main():
             "directory of the input files)"
         ),
     )
+    parser.add_argument(
+        "--remove",
+        action="store_true",
+        help="Remove existing output CSV files if they already exist.",
+    )
+    parser.add_argument(
+        "--separate",
+        action="store_true",
+        help="Split amount into income and spending columns.",
+    )
 
     args = parser.parse_args()
     pdf_files = []
@@ -508,14 +518,30 @@ def main():
                 table[key] = value
 
     for key in table:
-        output_path = f"{output_dir}/{key}.csv"
+        if (
+            key in {"", ".", ".."}
+            or os.path.sep in key
+            or (os.path.altsep is not None and os.path.altsep in key)
+        ):
+            raise ValueError(f"Invalid output file name: {key}")
+        output_path = os.path.join(output_dir, f"{key}.csv")
         if os.path.exists(output_path):
-            raise FileExistsError(
-                f"The file {output_path} already exists."
-                " Please move or remove it before executing..."
-            )
+            if args.remove:
+                os.remove(output_path)
+                logging.info("%s removed because --remove is enabled.", output_path)
+            else:
+                raise FileExistsError(
+                    f"The file {output_path} already exists."
+                    " Please move or remove it before executing,"
+                    " or rerun with --remove to overwrite it."
+                )
         df = pd.DataFrame(table[key])
-        df = df[["date", "amount", "description"]]
+        if args.separate:
+            df["income"] = df["amount"].where(df["amount"] >= 0, 0.0)
+            df["spending"] = df["amount"].where(df["amount"] < 0, 0.0)
+            df = df[["date", "income", "spending", "description"]]
+        else:
+            df = df[["date", "amount", "description"]]
         df = df.sort_values(by="date", ascending=False)
         df.to_csv(output_path, index=True, header=True)
         logging.info("%s created.", output_path)
