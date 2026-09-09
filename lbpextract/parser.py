@@ -19,8 +19,8 @@ import re
 import shutil
 from glob import glob
 from typing import Any, Dict, Tuple
-import fitz  # PyMuPDF
 import pandas as pd
+import pymupdf
 from systemtools.number import getAllNumbers, getFirstNumber
 from systemtools.printer import b, bp
 from tqdm import tqdm
@@ -124,7 +124,7 @@ black_snippets = [
 def parse_pdf(path):
     lines = []
     coordinates = []
-    for page in fitz.open(path):
+    for page in pymupdf.open(path):
         page_data = json.loads(page.get_text("json"))
         for block in page_data["blocks"]:
             for line in block["lines"]:
