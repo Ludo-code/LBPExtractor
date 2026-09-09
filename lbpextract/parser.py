@@ -518,7 +518,13 @@ def main():
                 table[key] = value
 
     for key in table:
-        output_path = f"{output_dir}/{key}.csv"
+        if (
+            key in {"", ".", ".."}
+            or os.path.sep in key
+            or (os.path.altsep is not None and os.path.altsep in key)
+        ):
+            raise ValueError(f"Invalid output file name: {key}")
+        output_path = os.path.join(output_dir, f"{key}.csv")
         if os.path.exists(output_path):
             if args.remove:
                 os.remove(output_path)
