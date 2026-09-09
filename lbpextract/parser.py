@@ -157,7 +157,7 @@ def parse_lbp_pdf(path):
     return lines, coordinates
 
 
-def is_number(line, regex=r"^[0-9 ,]+$"):
+def is_number(line, regex=r"^[0-9 ]+,[0-9]{2}$"):
     return re.match(regex, line) is not None
 
 
@@ -455,6 +455,20 @@ def main():
             "directory of the input files)"
         ),
     )
+    parser.add_argument(
+        "-delete",
+        "--delete",
+        dest="delete_existing",
+        action="store_true",
+        help="Delete an existing output CSV with the same name before writing.",
+    )
+    parser.add_argument(
+        "-separate",
+        "--separate",
+        dest="separate_amounts",
+        action="store_true",
+        help="Split amount into amount_positive and amount_negative columns.",
+    )
 
     args = parser.parse_args()
     pdf_files = []
@@ -510,12 +524,22 @@ def main():
     for key in table:
         output_path = f"{output_dir}/{key}.csv"
         if os.path.exists(output_path):
-            raise FileExistsError(
-                f"The file {output_path} already exists."
-                " Please move or remove it before executing..."
-            )
+            if args.delete_existing:
+                os.remove(output_path)
+                logging.info("%s removed before rewrite.", output_path)
+            else:
+                raise FileExistsError(
+                    f"The file {output_path} already exists."
+                    " Please move or remove it before executing..."
+                )
         df = pd.DataFrame(table[key])
-        df = df[["date", "amount", "description"]]
+        if args.separate_amounts:
+            is_negative = df["amount"].astype(str).str.startswith("-")
+            df["amount_positive"] = df["amount"].where(~is_negative, 0.0)
+            df["amount_negative"] = df["amount"].where(is_negative, 0.0)
+            df = df[["date", "amount_positive", "amount_negative", "description"]]
+        else:
+            df = df[["date", "amount", "description"]]
         df = df.sort_values(by="date", ascending=False)
         df.to_csv(output_path, index=True, header=True)
         logging.info("%s created.", output_path)
