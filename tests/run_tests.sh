@@ -97,6 +97,38 @@ check "francs statement exit 0" "0" "$?"
 check "francs debit sign (x<400)" "2001-06-08,-200.00,PRELEVEMENT" "$(grep PRELEVEMENT "$WORK/francs/55555555555.csv")"
 check "francs credit sign" "2001-06-20,1000.00,VIREMENT" "$(grep VIREMENT "$WORK/francs/55555555555.csv")"
 
+# --- test 8c: GUI mode (zenity mock) -------------------------------------------
+GUIMOCK="$WORK/guimock"
+mkdir -p "$GUIMOCK"
+cp "$REPO/tests/zenity_mock.sh" "$GUIMOCK/zenity"
+chmod +x "$GUIMOCK/zenity"
+mkdir -p "$WORK/gui_in"
+cp "$WORK"/fixtures/releve_jan.pdf "$WORK/gui_in/"
+# answers: 1=input dir, 2=output dir (empty), 3=remove=yes, 4=separate=yes
+export ZENITY_MOCK_LOG="$WORK/zenity.log"
+export ZENITY_MOCK_ANSWERS="$WORK/gui_in
+
+yes
+yes"
+( PATH="$GUIMOCK:$MOCKDIR:$PATH" ZENITY_MOCK_LOG="$ZENITY_MOCK_LOG" ZENITY_MOCK_ANSWERS="$ZENITY_MOCK_ANSWERS" \
+    bash "$REPO/lbpextract" --gui >/dev/null 2>&1 )
+check "GUI mode exit 0" "0" "$?"
+check "GUI produced CSV in input dir" "1" "$(ls "$WORK/gui_in"/*.csv 2>/dev/null | wc -l)"
+check "GUI --separate applied" "date,income,spending,description" "$(head -1 "$WORK/gui_in"/12345678901.csv 2>/dev/null)"
+unset ZENITY_MOCK_LOG ZENITY_MOCK_ANSWERS
+
+# GUI with no PDFs in the chosen dir -> exit 1
+mkdir -p "$WORK/gui_empty"
+export ZENITY_MOCK_LOG="$WORK/zenity2.log"
+export ZENITY_MOCK_ANSWERS="$WORK/gui_empty
+
+yes
+no"
+( PATH="$GUIMOCK:$MOCKDIR:$PATH" ZENITY_MOCK_LOG="$ZENITY_MOCK_LOG" ZENITY_MOCK_ANSWERS="$ZENITY_MOCK_ANSWERS" \
+    bash "$REPO/lbpextract" -g >/dev/null 2>&1 )
+check "GUI with empty dir -> exit 1" "1" "$?"
+unset ZENITY_MOCK_LOG ZENITY_MOCK_ANSWERS
+
 # --- test 9: invalid pdf -> exit 3 ----------------------------------------------
 mkdir -p "$WORK/bad" && echo "not a pdf" > "$WORK/bad/broken.pdf"
 cp "$WORK"/fixtures/releve_jan.pdf "$WORK/bad/"

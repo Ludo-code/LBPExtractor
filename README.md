@@ -17,6 +17,7 @@ Il vous suffit de rassembler vos PDFs dans un dossier et d'exécuter l'outil : u
   - Fedora : `sudo dnf install poppler-utils`
   - macOS : `brew install poppler`
   - Arch : `sudo pacman -S poppler`
+- **Optionnel** pour le mini-GUI : `zenity` (graphique), `whiptail` ou `dialog` (terminal) — voir le tableau des backends plus bas.
 
 ## Installation
 
@@ -49,6 +50,34 @@ lbpextract *.pdf
 
 Les fichiers CSV sont générés dans le même répertoire que les PDF (un CSV par compte, nommé d'après le numéro de compte).
 
+## Mini-GUI (optionnel)
+
+Sans aucun argument (ou avec `--gui`), l'outil ouvre une petite interface interactive au lieu de la ligne de commande :
+
+```bash
+lbpextract          # lance le mini-GUI si un backend est installé
+lbpextract --gui    # force le mini-GUI
+```
+
+Le mini-GUI vous demande successivement :
+
+1. le **dossier contenant vos relevés PDF** (tous les `*.pdf` du dossier sont traités),
+2. le **dossier de sortie** des CSV (vide = même dossier que les PDF),
+3. si les CSV existants doivent être **écrasés** (`--remove`),
+4. si les montants doivent être **séparés en income / spending** (`--separate`),
+
+puis lance la conversion et affiche le résultat (liste des CSV créés ou erreurs).
+
+Backends supportés, par ordre de préférence :
+
+| Backend | Type | Installation |
+|---|---|---|
+| `zenity` | fenêtres graphiques (GNOME) | `sudo apt install zenity` |
+| `whiptail` | dialogues dans le terminal | `sudo apt install whiptail` |
+| `dialog` | dialogues dans le terminal | `sudo apt install dialog` |
+
+Si aucun backend n'est installé, `lbpextract` sans argument affiche l'aide ; en passant des PDF en argument, le mode CLI fonctionne toujours, même sans aucun backend GUI.
+
 ### Options
 
 | Option | Description |
@@ -57,6 +86,7 @@ Les fichiers CSV sont générés dans le même répertoire que les PDF (un CSV p
 | `-r, --remove` | Écraser les CSV existants au lieu d'échouer. |
 | `-s, --separate` | Séparer la colonne `amount` en deux colonnes `income` (positifs) et `spending` (négatifs). |
 | `-k, --keep-temp` | Conserver le dossier temporaire (debug). |
+| `-g, --gui` | Lancer le mini-GUI interactif (zenity, whiptail ou dialog). |
 | `-V, --version` | Afficher la version. |
 | `-h, --help` | Afficher l'aide. |
 
