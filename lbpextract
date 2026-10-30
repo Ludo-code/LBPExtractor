@@ -1,0 +1,572 @@
+#!/usr/bin/env bash
+#
+# lbpextract - Convert La Banque Postale PDF statements into CSV files.
+#
+# Pure shell version (bash + POSIX awk + poppler-utils). No Python needed.
+#
+# Usage:
+#   lbpextract [OPTIONS] PDF...     convert the given PDFs (CLI mode)
+#   lbpextract --gui                launch the interactive mini-GUI
+#   lbpextract                      no arguments + GUI backend available
+#                                   => launch the mini-GUI; otherwise help
+#
+# Exit codes: 0 = ok, 1 = usage/dependency error, 2 = no PDF matched,
+#             3 = at least one PDF failed or no operation was extracted.
+
+set -u
+LC_ALL=C
+export LC_ALL
+
+PROG=lbpextract
+VERSION=1.0.0
+
+# Globals shared by the CLI driver and the GUI.
+OUTPUT_DIR=""
+OPT_REMOVE=0
+OPT_SEPARATE=0
+PDF_FILES=()
+
+TMPDIR_LBP=""
+KEEP_TEMP=0
+
+cleanup() {
+    if [ -n "$TMPDIR_LBP" ] && [ "$KEEP_TEMP" -eq 0 ]; then
+        rm -rf "$TMPDIR_LBP"
+    fi
+}
+trap cleanup EXIT
+
+die()  { printf '%s: error: %s\n' "$PROG" "$*" >&2; exit 1; }
+info() { printf '%s: %s\n' "$PROG" "$*" >&2; }
+warn() { printf '%s: warning: %s\n' "$PROG" "$*" >&2; }
+
+usage() {
+    cat >&2 <<EOF
+Usage: $PROG [OPTIONS] PDF [PDF...]
+
+Convert La Banque Postale PDF statements into CSV files (one CSV per account).
+
+Options:
+  -o, --output-dir DIR   Write CSV files into DIR (default: directory of the
+                         input PDFs; all inputs must share one directory
+                         unless -o is given).
+  -r, --remove           Overwrite existing CSV files instead of failing.
+  -s, --separate         Split 'amount' into 'income' and 'spending' columns.
+  -k, --keep-temp        Keep the temporary directory (for debugging).
+  -g, --gui              Launch the interactive mini-GUI (zenity, or
+                         whiptail/dialog in a terminal).
+  -V, --version          Print version and exit.
+  -h, --help             Show this help and exit.
+
+Arguments:
+  PDF...                 PDF files and/or glob patterns (e.g. '*.pdf').
+                         If omitted and a GUI backend is available, the
+                         mini-GUI is launched.
+
+Requires: bash, awk, pdftotext (poppler-utils).
+GUI (optional): zenity, or whiptail/dialog for the terminal fallback.
+EOF
+}
+# ------------------------------------------------------------- driver core ---
+# Everything from here to the end of run_cli() is shared by CLI and GUI.
+
+resolve_inputs() {
+    # Expand glob patterns from PDF_ARGS into PDF_FILES (absolute paths).
+    PDF_FILES=()
+    local pattern f found d b
+    for pattern in "${PDF_ARGS[@]}"; do
+        found=0
+        for f in $pattern; do
+            if [ -f "$f" ]; then
+                d=$(dirname "$f"); b=$(basename "$f")
+                PDF_FILES+=("$(cd "$d" && pwd)/$b")
+                found=1
+            fi
+        done
+        if [ "$found" -eq 0 ] && [ -f "$pattern" ]; then
+            d=$(dirname "$pattern"); b=$(basename "$pattern")
+            PDF_FILES+=("$(cd "$d" && pwd)/$b")
+        fi
+    done
+    [ ${#PDF_FILES[@]} -gt 0 ] || { warn "no PDF file matched"; exit 2; }
+
+    # Resolve output directory (same rule as the Python version).
+    if [ -z "$OUTPUT_DIR" ]; then
+        local first_dir same
+        first_dir=$(dirname "${PDF_FILES[0]}")
+        same=1
+        for f in "${PDF_FILES[@]}"; do
+            [ "$(dirname "$f")" = "$first_dir" ] || same=0
+        done
+        if [ "$same" -eq 1 ]; then
+            OUTPUT_DIR=$first_dir
+        else
+            die "input files are in multiple directories; specify -o/--output-dir"
+        fi
+    fi
+    mkdir -p "$OUTPUT_DIR" || die "cannot create output directory: $OUTPUT_DIR"
+    OUTPUT_DIR=$(cd "$OUTPUT_DIR" && pwd)
+
+    TMPDIR_LBP=$(mktemp -d "${TMPDIR:-/tmp}/${PROG}.XXXXXX") || die "mktemp failed"
+    return 0
+}
+
+run_cli() {
+    local dep
+    for dep in awk pdftotext md5sum; do
+        command -v "$dep" >/dev/null 2>&1 || die "missing dependency: $dep (install poppler-utils for pdftotext)"
+    done
+    resolve_inputs
+
+    local FAILED=0 pdf base tsv hash rows meta year months unrec m has_jan
+    local -A SEEN_HASH
+    local ROWS_ALL="$TMPDIR_LBP/rows.all"
+    : > "$ROWS_ALL"
+
+    for pdf in "${PDF_FILES[@]}"; do
+        info "processing $(basename "$pdf")"
+        base=$(basename "$pdf")
+        tsv="$TMPDIR_LBP/$base.tsv"
+        if ! extract_lines "$pdf" "$tsv" || [ ! -s "$tsv" ]; then
+            warn "could not extract text from $pdf (not a valid PDF?)"
+            FAILED=1
+            continue
+        fi
+        hash=$(md5sum "$tsv" | cut -d' ' -f1)
+        if [ -n "${SEEN_HASH[$hash]:-}" ]; then
+            warn "$base is a duplicate of $(basename "${SEEN_HASH[$hash]}") - skipped"
+            continue
+        fi
+        SEEN_HASH[$hash]=$pdf
+
+        rows="$TMPDIR_LBP/$base.rows"
+        meta="$TMPDIR_LBP/$base.meta"
+        parse_tsv "$tsv" > "$rows" 2> "$meta"
+
+        year=$(awk -F'\t' '$1=="META" && $2=="year"{print $3; exit}' "$meta")
+        months=$(awk -F'\t' '$1=="META" && $2=="months"{print $3; exit}' "$meta")
+        unrec=$(awk -F'\t' '$1=="META" && $2=="unrecognized"{print substr($0, index($0,$3)); exit}' "$meta")
+        if [ -n "$unrec" ]; then
+            warn "unrecognized lines in $base (please check no data was missed):$unrec"
+        fi
+        if [ -z "$year" ] || [ "$year" = "0" ]; then
+            warn "no print year found in $base - file skipped"
+            FAILED=1
+            continue
+        fi
+
+        has_jan=0
+        for m in $months; do [ "$m" = "1" ] && has_jan=1; done
+
+        # Fix the year: a December operation belongs to year-1 when January
+        # is also present (same heuristic as the Python version).
+        awk -F'\t' -v year="$year" -v has_jan="$has_jan" '
+            NF == 4 {
+                split($2, d, "-")
+                y = year + 0
+                if (has_jan && d[1] == 12) y = year - 1
+                printf "%s\t%04d-%02d-%02d\t%s\t%s\n", $1, y, d[1], d[2], $3, $4
+            }
+        ' "$rows" >> "$ROWS_ALL"
+    done
+
+    [ -s "$ROWS_ALL" ] || { warn "no operations extracted"; return 3; }
+
+    # Collect the account list, then check for output conflicts BEFORE writing.
+    local ACCOUNTS acct out_csv tmp_csv
+    ACCOUNTS=$(cut -f1 "$ROWS_ALL" | sort -u)
+    [ -n "$ACCOUNTS" ] || { warn "no account found"; return 3; }
+    for acct in $ACCOUNTS; do
+        case "$acct" in
+            ""|"."|".."|*/*) die "invalid account name for output file: $acct" ;;
+        esac
+        if [ -e "$OUTPUT_DIR/$acct.csv" ] && [ "$OPT_REMOVE" -eq 0 ]; then
+            die "$OUTPUT_DIR/$acct.csv already exists; move it away or rerun with --remove to overwrite"
+        fi
+    done
+
+    for acct in $ACCOUNTS; do
+        out_csv="$OUTPUT_DIR/$acct.csv"
+        tmp_csv="$TMPDIR_LBP/out.$acct.csv"
+        {
+            if [ "$OPT_SEPARATE" -eq 1 ]; then
+                printf 'date,income,spending,description\n'
+            else
+                printf 'date,amount,description\n'
+            fi
+            awk -F'\t' -v acct="$acct" -v sep="$OPT_SEPARATE" '
+                function csvq(s) {
+                    if (s ~ /[",\r\n]/) { gsub(/"/, "\"\"", s); return "\"" s "\"" }
+                    return s
+                }
+                $1 == acct {
+                    d = $2; a = $3 + 0; desc = $4
+                    if (sep) {
+                        inc = (a >= 0 ? a : 0)
+                        spe = (a < 0 ? a : 0)
+                        printf "%s,%.2f,%.2f,%s\n", d, inc, spe, csvq(desc)
+                    } else {
+                        printf "%s,%.2f,%s\n", d, a, csvq(desc)
+                    }
+                }
+            ' "$ROWS_ALL" | LC_ALL=C sort -t, -k1,1r
+        } > "$tmp_csv"
+        mv "$tmp_csv" "$out_csv"
+        info "$out_csv created"
+    done
+
+    if [ "$FAILED" -ne 0 ]; then
+        info "done (with errors)"
+        return 3
+    fi
+    info "done"
+    return 0
+}
+
+# ------------------------------------------------------------------- GUI ----
+# Mini interactive GUI. Backends, in order of preference:
+#   zenity                 graphical dialogs (GNOME)
+#   whiptail / dialog      terminal dialogs
+# PDF_FILES, OUTPUT_DIR, OPT_REMOVE and OPT_SEPARATE are set by the GUI and
+# consumed by run_cli().
+
+gui_backend() {
+    if command -v zenity >/dev/null 2>&1; then echo zenity
+    elif command -v whiptail >/dev/null 2>&1; then echo whiptail
+    elif command -v dialog >/dev/null 2>&1; then echo dialog
+    else echo ""; fi
+}
+
+run_gui() {
+    local backend
+    backend=$(gui_backend)
+    if [ -z "$backend" ]; then
+        warn "no GUI backend found (install zenity, whiptail or dialog)"
+        usage
+        return 1
+    fi
+    case "$backend" in
+        zenity)   gui_zenity ;;
+        whiptail) gui_whiptail ;;
+        dialog)   gui_dialog ;;
+    esac
+}
+
+gui_zenity() {
+    local dir files
+    dir=$(zenity --file-selection --directory --title="Choisir le dossier contenant vos relevés PDF" 2>/dev/null) || return 1
+    [ -d "$dir" ] || return 1
+    files=$(cd "$dir" && ls -1 -- *.pdf 2>/dev/null) || true
+    [ -n "$files" ] || { zenity --warning --text="Aucun fichier PDF dans ce dossier." 2>/dev/null; return 1; }
+    PDF_ARGS=()
+    while IFS= read -r f; do PDF_ARGS+=("$dir/$f"); done <<< "$files"
+    OUTPUT_DIR=$(zenity --file-selection --directory --title="Dossier de sortie des CSV (même dossier par défaut)" 2>/dev/null) || OUTPUT_DIR=""
+    [ -n "$OUTPUT_DIR" ] || OUTPUT_DIR=""
+    zenity --question --title="Options" --text="Écraser les CSV existants ?" 2>/dev/null && OPT_REMOVE=1 || OPT_REMOVE=0
+    zenity --question --title="Options" --text="Séparer income / spending en deux colonnes ?" 2>/dev/null && OPT_SEPARATE=1 || OPT_SEPARATE=0
+    gui_run_and_report
+}
+
+gui_whiptail() {
+    local dir
+    dir=$(whiptail --inputbox "Dossier contenant vos relevés PDF :" 8 60 "$HOME" 3>&1 1>&2 2>/dev/null) || return 1
+    [ -d "$dir" ] || { whiptail --msgbox "Dossier invalide : $dir" 8 60 3>&1 1>&2 2>/dev/null; return 1; }
+    PDF_ARGS=()
+    local f
+    while IFS= read -r f; do PDF_ARGS+=("$dir/$f"); done < <(cd "$dir" && ls -1 -- *.pdf 2>/dev/null)
+    [ ${#PDF_ARGS[@]} -gt 0 ] || { whiptail --msgbox "Aucun fichier PDF dans $dir" 8 60 3>&1 1>&2 2>/dev/null; return 1; }
+    OUTPUT_DIR=$(whiptail --inputbox "Dossier de sortie des CSV (vide = même dossier) :" 8 60 "$dir" 3>&1 1>&2 2>/dev/null) || OUTPUT_DIR=""
+    whiptail --yesno "Écraser les CSV existants ?" 8 60 3>&1 1>&2 2>/dev/null && OPT_REMOVE=1 || OPT_REMOVE=0
+    whiptail --yesno "Séparer income / spending en deux colonnes ?" 8 60 3>&1 1>&2 2>/dev/null && OPT_SEPARATE=1 || OPT_SEPARATE=0
+    gui_run_and_report
+}
+
+gui_dialog() {
+    local dir
+    dialog --inputbox "Dossier contenant vos relevés PDF :" 8 60 "$HOME" 2>"$TMPDIR_LBP.gui.$$" || { rm -f "$TMPDIR_LBP.gui.$$"; return 1; }
+    dir=$(cat "$TMPDIR_LBP.gui.$$"); rm -f "$TMPDIR_LBP.gui.$$"
+    [ -d "$dir" ] || { dialog --msgbox "Dossier invalide : $dir" 8 60; return 1; }
+    PDF_ARGS=()
+    local f
+    while IFS= read -r f; do PDF_ARGS+=("$dir/$f"); done < <(cd "$dir" && ls -1 -- *.pdf 2>/dev/null)
+    [ ${#PDF_ARGS[@]} -gt 0 ] || { dialog --msgbox "Aucun fichier PDF dans $dir" 8 60; return 1; }
+    local tmpd="$TMPDIR_LBP.dlg.$$"
+    dialog --inputbox "Dossier de sortie des CSV (vide = même dossier) :" 8 60 "$dir" 2>"$tmpd" || { rm -f "$tmpd"; OUTPUT_DIR=""; }
+    OUTPUT_DIR=$(cat "$tmpd" 2>/dev/null); rm -f "$tmpd"
+    dialog --yesno "Écraser les CSV existants ?" 8 60 && OPT_REMOVE=1 || OPT_REMOVE=0
+    dialog --yesno "Séparer income / spending en deux colonnes ?" 8 60 && OPT_SEPARATE=1 || OPT_SEPARATE=0
+    gui_run_and_report
+}
+
+gui_run_and_report() {
+    local rc log
+    log="$TMPDIR_LBP.gui.log.$$"
+    run_cli 2>"$log"
+    rc=$?
+    local backend
+    backend=$(gui_backend)
+    case "$backend" in
+        zenity)
+            if [ "$rc" -eq 0 ]; then
+                zenity --info --title="Terminé" --text="Conversion réussie. CSV dans :\n$OUTPUT_DIR\n\n$(grep 'created' "$log" | sed 's/^[^:]*: //')" 2>/dev/null
+            else
+                zenity --warning --title="Échec" --text="La conversion a rencontré des erreurs :\n\n$(tail -20 "$log")" 2>/dev/null
+            fi ;;
+        whiptail)
+            if [ "$rc" -eq 0 ]; then
+                whiptail --msgbox "Conversion réussie. CSV dans :\n$OUTPUT_DIR\n\n$(grep 'created' "$log" | sed 's/^[^:]*: //')" 10 70 3>&1 1>&2 2>/dev/null
+            else
+                whiptail --msgbox "Erreurs :\n\n$(tail -20 "$log")" 20 70 3>&1 1>&2 2>/dev/null
+            fi ;;
+        dialog)
+            if [ "$rc" -eq 0 ]; then
+                dialog --msgbox "Conversion réussie. CSV dans :\n$OUTPUT_DIR\n\n$(grep 'created' "$log" | sed 's/^[^:]*: //')" 12 70
+            else
+                dialog --msgbox "Erreurs :\n\n$(tail -20 "$log")" 20 70
+            fi ;;
+    esac
+    rm -f "$log"
+    return "$rc"
+}
+
+
+
+# ------------------------------------------------------------- extraction ---
+# pdftotext -bbox-layout emits XHTML with <line> elements containing <word>
+# elements. We emit one TSV row per visual line: xMin<TAB>concatenated text.
+extract_lines() {
+    local pdf=$1 out=$2
+    pdftotext -bbox-layout -enc UTF-8 "$pdf" - 2>/dev/null | awk '
+        function unescape(t,  amp) {
+            amp = sprintf("%c%c", 92, 38)
+            gsub(/&lt;/, "<", t); gsub(/&gt;/, ">", t)
+            gsub(/&quot;/, "\"", t); gsub(/&#39;|&apos;/, sprintf("%c", 39), t)
+            gsub(/&amp;/, amp, t)
+            return t
+        }
+        /<line / { in_line = 1; lx = ""; buf = "" }
+        /<word/ && in_line {
+            rest = $0
+            while (match(rest, /<word[^>]*>[^<]*<\/word>/)) {
+                w = substr(rest, RSTART, RLENGTH)
+                rest = substr(rest, RSTART + RLENGTH)
+                x = ""
+                if (match(w, /xMin="[-0-9.]+"/))
+                    x = substr(w, RSTART + 6, RLENGTH - 7)
+                t = w
+                sub(/^<word[^>]*>/, "", t); sub(/<\/word>$/, "", t)
+                t = unescape(t)
+                if (buf == "") lx = x
+                buf = (buf == "" ? t : buf " " t)
+            }
+        }
+        /<\/line>/ {
+            if (in_line && buf != "") printf "%s\t%s\n", lx, buf
+            in_line = 0
+        }
+    ' > "$out"
+}
+
+# ---------------------------------------------------------------- parser ----
+# Reads the TSV (xMin<TAB>text) and writes to stdout one row per operation:
+#   account<TAB>MM-DD<TAB>amount<TAB>description   (year added by the caller)
+# Metadata goes to stderr as "META\tkey\tvalue" lines.
+parse_tsv() {
+    local tsv=$1
+    awk -F'\t' '
+    function is_number(s) { return s ~ /^[-+]?[0-9][0-9 ]*,[0-9][0-9]( €| ¤)?$/ }
+    function num(s,   t, neg) {
+        t = s
+        neg = (t ~ /^-/)
+        sub(/^[-+]/, "", t)
+        sub(/ ( €| ¤)?$/, "", t)
+        gsub(/ /, "", t)
+        sub(/,/, ".", t)
+        t = t + 0
+        return (neg ? -t : t)
+    }
+    function sign_for(x, francs) {
+        return (francs ? (x < 400 ? -1 : 1) : (x < 490 ? -1 : 1))
+    }
+    function blacklisted(s) {
+        return s ~ /Vous avez adhéré au contrat d assurance All/ \
+            || s ~ /Conformément à la loi du 17 mars 2014/ \
+            || s ~ /Banque Postale fait évoluer les conditions/ \
+            || s ~ /OPPOSITION EN CAS DE PERTE OU DE VOL/ \
+            || s ~ /3639 \(2\) 24h\/24/ \
+            || s ~ /QUELLES GARANTIES POUR VOS DÉPÔTS/ \
+            || s ~ /Fonds de Garanties des Dépôts et de Résolution/ \
+            || s ~ /75275 PARIS CEDEX 06/ \
+            || s ~ /BON À SAVOIR/ \
+            || s ~ /Service Relation Recours/ \
+            || s ~ /Médiateur de La Banque/ \
+            || s ~ /IMPORTANT : DANS TOUS LES CAS/ \
+            || s ~ /Pour votre information/
+    }
+    function emit_operation(d, amt_text, amt_x, desc, francs,   month, s) {
+        month = substr(d, 4, 2) + 0
+        s = num(amt_text) * sign_for(amt_x, francs)
+        printf "%s\t%02d-%02d\t%.2f\t%s\n", cur_acct, month, substr(d, 1, 2) + 0, s, desc
+        months_seen = months_seen " " month
+    }
+    BEGIN {
+        nbsp = sprintf("%c%c", 194, 160)
+        narrow_nbsp = sprintf("%c%c%c", 226, 128, 175)
+    }
+    {
+        line = $2
+        x = $1 + 0
+        gsub(nbsp, " ", line)
+        gsub(narrow_nbsp, " ", line)
+        gsub(/^[ \t]+|[ \t]+$/, "", line)
+        gsub(/[ \t]+/, " ", line)
+        if (line == "") next
+        n++
+        L[n] = line
+        X[n] = x
+    }
+    END {
+        francs = 0
+        for (i = 1; i <= n; i++) if (L[i] ~ /Soit en francs/) francs = 1
+
+        year = 0
+        cur_acct = ""
+        months_seen = ""
+        unrec = ""
+
+        for (i = 1; i <= n; i++) {
+            l = L[i]
+
+            # Account header: line with "n° XXX" followed by an IBAN/BIC line.
+            if (l ~ /n° / && i + 1 <= n && L[i+1] ~ /IBAN/ && L[i+1] ~ / \| BIC/) {
+                acct = l
+                sub(/.*n° /, "", acct)
+                gsub(/[^0-9A-Z]/, "", acct)
+                cur_acct = acct
+                accts[acct] = 1
+                i++
+                continue
+            }
+
+            # IBAN/BIC line itself (already consumed above when preceded by
+            # an account line, otherwise ignore it).
+            if (l ~ /IBAN/ && l ~ / \| BIC/)
+                continue
+
+            # Amount with currency at the end of a line, e.g. "500,00 €".
+            if (l ~ /^[0-9][0-9 ]*,[0-9][0-9]( €| ¤)$/)
+                continue
+
+            # Print date -> year: "... édité le JJ/MM/AAAA" (the é between
+            # "dit" and "le" prevents a naive literal match).
+            if (match(l, /le [0-9][0-9]\/[0-9][0-9]\/[0-9][0-9][0-9][0-9]/)) {
+                y = substr(l, RSTART + 3, RLENGTH - 3)
+                split(y, p, "/")
+                if (p[3] ~ /^[0-9][0-9][0-9][0-9]$/) year = p[3] + 0
+                continue
+            }
+
+            # Operation: "JJ/MM ..." possibly with the amount at the END of
+            # the same visual line (poppler may merge the amount column).
+            if (l ~ /^[0-9][0-9]\/[0-9][0-9]( |$)/) {
+                d = substr(l, 1, 5)
+                rest = substr(l, 7)
+                gsub(/^[ \t]+|[ \t]+$/, "", rest)
+                if (rest ~ /[-+]?[0-9][0-9 ]*,[0-9][0-9]$/) {
+                    match(rest, /[-+]?[0-9][0-9 ]*,[0-9][0-9]$/)
+                    amt = substr(rest, RSTART, RLENGTH)
+                    desc = substr(rest, 1, RSTART - 1)
+                    gsub(/[ \t]+$/, "", desc)
+                    emit_operation(d, amt, X[i], desc, francs)
+                    if (francs && i + 1 <= n && is_number(L[i+1])) i++
+                    continue
+                }
+                desc = rest
+                j = i + 1
+                while (j <= n && j - i <= 12) {
+                    if (is_number(L[j])) break
+                    if (desc == "") desc = L[j]
+                    else desc = desc " | " L[j]
+                    j++
+                }
+                if (j > n || j - i > 12 || !is_number(L[j])) {
+                    unrec = unrec " | " l
+                    i = j - 1
+                    continue
+                }
+                emit_operation(d, L[j], X[j], desc, francs)
+                i = j
+                if (francs && i + 1 <= n && is_number(L[i+1])) i++
+                continue
+            }
+
+            # A bare amount line that was not consumed by an operation is a
+            # balance/total figure: not an operation, skip silently.
+            if (is_number(l))
+                continue
+
+            # Identity line under the statement header.
+            if (l ~ /^(MR|MME|M\.|Mme|Dr) /)
+                continue
+
+            # Postal address line.
+            if (l ~ /^[0-9]+[A-Z]? (RUE|AV|AVENUE|BD|BOULEVARD|IMPASSE|PLACE|CHEMIN|ALLEE| ALLÉE|COURS|PASSAGE) /)
+                continue
+
+            # Known structural lines that carry no data.
+            if (l ~ /^(Page [0-9]+\/[0-9]+|Vos opérations|Date|Opération|Débit|Crédit|Soit en francs|Ancien solde|Total des opérations|Comptes d.Epargne|Situation de vos comptes|Coût de connexion|Découvert autorisé|Relevé de|Relevé n°|Vos coordonnées|Téléphone|Adresse|Madame|Monsieur)/)
+                continue
+            if (l ~ /ouveau solde au/)
+                continue
+            if (blacklisted(l))
+                continue
+
+            unrec = unrec " | " l
+        }
+
+        printf "META\tyear\t%d\n", year > "/dev/stderr"
+        printf "META\tmonths\t%s\n", months_seen > "/dev/stderr"
+        for (a in accts) printf "META\taccount\t%s\n", a > "/dev/stderr"
+        if (unrec != "")
+            printf "META\tunrecognized\t%s\n", unrec > "/dev/stderr"
+    }
+    ' "$tsv"
+}
+
+# ---------------------------------------------------------------- options ---
+OPT_GUI=0
+PDF_ARGS=()
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -o|--output-dir)
+            [ $# -ge 2 ] || die "option $1 requires an argument"
+            OUTPUT_DIR=$2; shift 2 ;;
+        --output-dir=*) OUTPUT_DIR=${1#*=}; shift ;;
+        -r|--remove)    OPT_REMOVE=1; shift ;;
+        -s|--separate)  OPT_SEPARATE=1; shift ;;
+        -k|--keep-temp) KEEP_TEMP=1; shift ;;
+        -g|--gui)       OPT_GUI=1; shift ;;
+        -V|--version)   printf '%s %s\n' "$PROG" "$VERSION"; exit 0 ;;
+        -h|--help)      usage; exit 0 ;;
+        --) shift; while [ $# -gt 0 ]; do PDF_ARGS+=("$1"); shift; done ;;
+        -*) die "unknown option: $1 (try --help)" ;;
+        *)  PDF_ARGS+=("$1"); shift ;;
+    esac
+done
+
+# No arguments at all: try the GUI if a backend is installed.
+if [ ${#PDF_ARGS[@]} -eq 0 ] && [ "$OPT_GUI" -eq 0 ]; then
+    if command -v zenity >/dev/null 2>&1 || command -v whiptail >/dev/null 2>&1 || command -v dialog >/dev/null 2>&1; then
+        OPT_GUI=1
+    else
+        usage
+        exit 1
+    fi
+fi
+[ "$OPT_GUI" -eq 0 ] || { run_gui; exit $?; }
+
+[ ${#PDF_ARGS[@]} -gt 0 ] || { usage; exit 1; }
+
+# ------------------------------------------------------------------ main ----
+run_cli

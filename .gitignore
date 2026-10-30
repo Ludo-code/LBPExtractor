@@ -1,14 +1,5 @@
-# Ignore build artifacts
-build/
-dist/
-__pycache__/
-*.pyc
-*.pyo
+# Test artifacts
+tests/fixtures/
 
-# Ignore distribution packages
-*.egg-info/
-*.egg
-*.egg-info
-*.dist-info
-*.whl
-
+# Temp/debug output
+lbpextract.*/
